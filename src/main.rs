@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 
 struct CacheEntry<T> {
@@ -25,7 +25,7 @@ struct CacheOptions {
 }
 
 struct Cache<K, V> {
-    store: Arc<Mutex<HashMap<K, CacheEntry<V>>>>,
+    store: HashMap<K, CacheEntry<V>>,
     options: CacheOptions,
 }
 
@@ -36,14 +36,13 @@ where
 {
     fn new(options: CacheOptions) -> Self {
         Self {
-            store: Arc::new(Mutex::new(HashMap::new())),
+            store: HashMap::new(),
             options,
         }
     }
 
-    fn get(&mut self, key: K) -> Option<V> {
-        let store = self.store.lock().unwrap();
-        let entry = store.get(&key);
+    fn get(&self, key: K) -> Option<V> {
+        let entry = self.store.get(&key);
         if let Some(entry) = entry {
             if self.is_expired(entry) {
                 return None;
@@ -56,21 +55,21 @@ where
 
     fn set(&mut self, key: K, value: V) {
         self.remove_expired();
-        let is_full = self.store.lock().unwrap().len() == self.options.max_size;
+        let is_full = self.store.len() == self.options.max_size;
 
         if is_full {
             self.remove_oldest();
         }
         let value = CacheEntry::new(value);
-        self.store.lock().unwrap().insert(key, value);
+        self.store.insert(key, value);
     }
 
     fn clear(&mut self) {
-        self.store.lock().unwrap().clear();
+        self.store.clear();
     }
 
     fn size(&self) -> usize {
-        self.store.lock().unwrap().len()
+        self.store.len()
     }
 
     fn is_expired(&self, entry: &CacheEntry<V>) -> bool {
@@ -86,14 +85,12 @@ where
     fn remove_oldest(&mut self) {
         //fix this
         if let Some(oldest_key) = self.find_oldest() {
-            self.store.lock().unwrap().remove(&oldest_key);
+            self.store.remove(&oldest_key);
         }
     }
 
     fn find_oldest(&self) -> Option<K> {
         self.store
-            .lock()
-            .unwrap()
             .iter()
             .min_by_key(|(_, entry)| entry.timestamp)
             .map(|(key, _)| key.clone())
@@ -102,7 +99,7 @@ where
     fn remove_expired(&mut self) {
         let now = SystemTime::now();
 
-        self.store.lock().unwrap().retain(|_, entry| {
+        self.store.retain(|_, entry| {
             if let Ok(elapsed) = now.duration_since(entry.timestamp) {
                 elapsed < self.options.ttl
             } else {
@@ -118,14 +115,15 @@ fn main() {
         max_size: 3,
     };
 
-    let mut cache: Cache<u32, &str> = Cache::new(options);
+    let cache = Arc::new(RwLock::new(Cache::<i32, &str>::new(options)));
     let name1 = "Mike Willis";
-    cache.set(1, name1);
-    let value1 = cache.get(1);
+    cache.write().unwrap().set(1, name1);
+
+    let value1 = cache.read().unwrap().get(1);
     assert_eq!(value1.unwrap(), name1);
 
-    assert_eq!(cache.size(), 1);
-    cache.clear();
+    assert_eq!(cache.read().unwrap().size(), 1);
+    cache.write().unwrap().clear();
 
     println!("Done, world!");
 }
